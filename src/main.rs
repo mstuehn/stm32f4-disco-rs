@@ -6,8 +6,6 @@ use panic_halt as _;
 use rtt_target::{rtt_init_print, rprintln};
 
 use cortex_m_rt::entry;
-use stm32f4xx_hal::gpio::ReadPin;
-use stm32f4xx_hal::hal::digital::OutputPin;
 use stm32f4xx_hal::otg_fs::{UsbBus, USB};
 use stm32f4xx_hal::{pac, prelude::*};
 use usb_device::device::StringDescriptors;

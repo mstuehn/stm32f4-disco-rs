@@ -1,18 +1,35 @@
 #![no_std]
 #![no_main]
 
+//use hal::hal_02::digital::v2::ToggleableOutputPin;
 use panic_halt as _;
 
 use rtt_target::{rtt_init_print, rprintln};
+use stm32f4xx_hal as hal;
+
+use crate::hal::{
+    gpio::{Edge, Input, PA0, PD12, Output},
+    interrupt, pac,
+    prelude::*,
+    otg_fs::{UsbBus, USB},
+};
 
 use cortex_m_rt::entry;
-use stm32f4xx_hal::otg_fs::{UsbBus, USB};
-use stm32f4xx_hal::{pac, prelude::*};
+
+use cortex_m::interrupt::{free, Mutex};
 use usb_device::device::StringDescriptors;
 use usb_device::prelude::*;
 use usbd_serial::{SerialPort, USB_CLASS_CDC};
 
+use core::{
+    cell::RefCell,
+    ops::DerefMut
+};
+
 static mut EP_MEMORY: [u32; 1024] = [0; 1024];
+
+static BUTTON: Mutex<RefCell<Option<PA0<Input>>>> = Mutex::new(RefCell::new(None));
+static LED_HANDLER: Mutex<RefCell<Option<PD12<Output>>>> = Mutex::new(RefCell::new(None));
 
 #[entry]
 fn main() -> ! {
@@ -20,7 +37,8 @@ fn main() -> ! {
     rtt_init_print!();
     rprintln!("Starting Controller");
 
-    let dp = pac::Peripherals::take().unwrap();
+    let mut dp = pac::Peripherals::take().unwrap();
+    let mut syscfg = dp.SYSCFG.constrain();
 
     let rcc = dp.RCC.constrain();
 
@@ -33,14 +51,15 @@ fn main() -> ! {
         .freeze();
 
     let gpioa = dp.GPIOA.split();
-    let button = gpioa.pa0.into_input();
+    //let button = gpioa.pa0.into_input();
+
+    let mut board_btn = gpioa.pa0.into_pull_down_input();
+    board_btn.make_interrupt_source(&mut syscfg);
+    board_btn.enable_interrupt(&mut dp.EXTI);
+    board_btn.trigger_on_edge(&mut dp.EXTI, Edge::Falling);
 
     let gpiod = dp.GPIOD.split();
-    let mut green = gpiod.pd12.into_push_pull_output();
-    green.set_high(); // Turn off
-
-    let mut red = gpiod.pd14.into_push_pull_output();
-    red.set_high(); // Turn off
+    let green = gpiod.pd12.into_push_pull_output();
 
     let usb = USB {
         usb_global: dp.OTG_FS_GLOBAL,
@@ -66,12 +85,17 @@ fn main() -> ! {
         .device_class(USB_CLASS_CDC)
         .build();
 
+    free(|cs| {
+        BUTTON.borrow(cs).replace(Some(board_btn));
+        LED_HANDLER.borrow(cs).replace(Some(green));
+    });
+
+    pac::NVIC::unpend(hal::pac::Interrupt::EXTI0);
+    unsafe {
+        pac::NVIC::unmask(hal::pac::Interrupt::EXTI0);
+    };
+
     loop {
-        if button.is_low() {
-            red.set_low();
-        } else {
-            red.set_high();
-        }
 
         if !usb_dev.poll(&mut [&mut serial]) {
             continue;
@@ -81,7 +105,6 @@ fn main() -> ! {
 
         match serial.read(&mut buf) {
             Ok(count) if count > 0 => {
-                green.set_low(); // Turn on
 
                 match core::str::from_utf8( &mut buf[0..count]) {
                     Err(e) => {
@@ -118,7 +141,21 @@ fn main() -> ! {
                 rprintln!("Unknown error occured");
             }
         }
-
-        green.set_high(); // Turn off
     }
 }
+
+#[allow(non_snake_case)]
+#[interrupt]
+fn EXTI0() {
+    free(|cs| {
+        let mut btn_ref = BUTTON.borrow(cs).borrow_mut();
+        if let Some(ref mut btn) = btn_ref.deref_mut() {
+            btn.clear_interrupt_pending_bit();
+        }
+        let mut grn_ref = LED_HANDLER.borrow(cs).borrow_mut();
+        if let Some(ref mut grn) = grn_ref.deref_mut() {
+            grn.toggle();
+        }
+    });
+}
+

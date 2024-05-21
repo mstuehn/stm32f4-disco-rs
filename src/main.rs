@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+use core::ptr::addr_of_mut;
+
 use panic_halt as _;
 
 use rtt_target::{rtt_init_print, rprintln};
@@ -52,7 +54,7 @@ fn main() -> ! {
     };
     rprintln!("USB set up");
 
-    let usb_bus = UsbBus::new(usb, unsafe { &mut EP_MEMORY });
+    let usb_bus = UsbBus::new(usb, unsafe { &mut *addr_of_mut!(EP_MEMORY) });
 
     let mut serial = SerialPort::new(&usb_bus);
     rprintln!("Serial set up");
